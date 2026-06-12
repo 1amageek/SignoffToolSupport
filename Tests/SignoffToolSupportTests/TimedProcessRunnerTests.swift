@@ -48,6 +48,39 @@ struct TimedProcessRunnerTests {
         #expect(!isProcessAlive(childPIDValue))
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func timeoutEscalatesToSIGKILLWhenProcessIgnoresTerminate() async throws {
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", "trap '' TERM; (trap '' TERM; while true; do sleep 1; done) & echo child=$!; while true; do sleep 1; done"]
+
+        var didTimeout = false
+        var childPID: pid_t?
+        do {
+            _ = try await TimedProcessRunner(
+                timeoutSeconds: 0.3,
+                terminationGraceSeconds: 0.1,
+                pipeDrainGraceSeconds: 0.05
+            ).run(process: process)
+        } catch let error as TimedProcessError {
+            switch error {
+            case .timedOut(_, _, let standardOutput, _):
+                didTimeout = true
+                childPID = parseChildPID(from: standardOutput)
+            default:
+                throw error
+            }
+        } catch {
+            throw error
+        }
+
+        #expect(didTimeout)
+        #expect(!process.isRunning)
+        let childPIDValue = try #require(childPID)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(!isProcessAlive(childPIDValue))
+    }
+
     @Test func invalidTimeoutConfigurationThrowsBeforeLaunch() async throws {
         let process = Process()
         process.executableURL = URL(filePath: "/bin/true")
