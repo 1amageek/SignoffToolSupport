@@ -1,5 +1,4 @@
 import Foundation
-import Synchronization
 
 #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
 import Darwin
@@ -20,6 +19,7 @@ public struct TimedProcessResult: Sendable, Hashable {
 public enum TimedProcessError: Error, LocalizedError, Equatable {
     case invalidConfiguration(String)
     case launchFailed(executablePath: String, message: String)
+    case cancellationCheckFailed(executablePath: String, message: String, standardOutput: String, standardError: String)
     case cancelled(executablePath: String, standardOutput: String, standardError: String)
     case timedOut(executablePath: String, timeoutSeconds: Double, standardOutput: String, standardError: String)
 
@@ -29,6 +29,8 @@ public enum TimedProcessError: Error, LocalizedError, Equatable {
             return "Invalid process runner configuration: \(message)"
         case .launchFailed(let executablePath, let message):
             return "Process failed to launch: \(executablePath): \(message)"
+        case .cancellationCheckFailed(let executablePath, let message, _, _):
+            return "Process cancellation check failed: \(executablePath): \(message)"
         case .cancelled(let executablePath, _, _):
             return "Process was cancelled: \(executablePath)"
         case .timedOut(let executablePath, let timeoutSeconds, _, _):
@@ -53,6 +55,55 @@ public struct TimedProcessRunner: Sendable {
     }
 
     public func run(process: Process) async throws -> TimedProcessResult {
+        try await run(process: process, cancellationCheck: nil)
+    }
+
+    public func run(
+        process: Process,
+        cancellationCheck: (@Sendable () async throws -> Bool)?
+    ) async throws -> TimedProcessResult {
+        let configuration = try makeConfiguration(process: process, cancellationCheck: cancellationCheck)
+        try await validateCancellationBeforeLaunch(configuration)
+
+        let cancellationBox = TimedProcessTaskCancellationBox(
+            terminationGraceSeconds: configuration.terminationGraceSeconds
+        )
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                startSession(
+                    TimedProcessRunSession(configuration: configuration, continuation: continuation),
+                    cancellationBox: cancellationBox
+                )
+            }
+        } onCancel: {
+            cancellationBox.cancel()
+        }
+    }
+
+    private func makeConfiguration(
+        process: Process,
+        cancellationCheck: (@Sendable () async throws -> Bool)?
+    ) throws -> TimedProcessRunConfiguration {
+        try validateRunnerConfiguration()
+        guard let executableURL = process.executableURL else {
+            throw TimedProcessError.launchFailed(
+                executablePath: "<unknown>",
+                message: "executableURL is required"
+            )
+        }
+        return TimedProcessRunConfiguration(
+            executablePath: executableURL.path(percentEncoded: false),
+            arguments: process.arguments ?? [],
+            environment: process.environment,
+            workingDirectory: process.currentDirectoryURL,
+            timeoutSeconds: timeoutSeconds,
+            terminationGraceSeconds: terminationGraceSeconds,
+            pipeDrainGraceSeconds: pipeDrainGraceSeconds,
+            cancellationCheck: cancellationCheck
+        )
+    }
+
+    private func validateRunnerConfiguration() throws {
         guard timeoutSeconds.isFinite, timeoutSeconds > 0 else {
             throw TimedProcessError.invalidConfiguration("timeoutSeconds must be positive finite seconds")
         }
@@ -62,215 +113,396 @@ public struct TimedProcessRunner: Sendable {
         guard pipeDrainGraceSeconds.isFinite, pipeDrainGraceSeconds >= 0 else {
             throw TimedProcessError.invalidConfiguration("pipeDrainGraceSeconds must be finite and non-negative")
         }
+    }
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+    private func validateCancellationBeforeLaunch(_ configuration: TimedProcessRunConfiguration) async throws {
+        if Task.isCancelled {
+            throw TimedProcessError.cancelled(
+                executablePath: configuration.executablePath,
+                standardOutput: "",
+                standardError: ""
+            )
+        }
+        guard let cancellationCheck = configuration.cancellationCheck else { return }
+        do {
+            if try await cancellationCheck() {
+                throw TimedProcessError.cancelled(
+                    executablePath: configuration.executablePath,
+                    standardOutput: "",
+                    standardError: ""
+                )
+            }
+        } catch let error as TimedProcessError {
+            throw error
+        } catch {
+            throw TimedProcessError.cancellationCheckFailed(
+                executablePath: configuration.executablePath,
+                message: String(describing: error),
+                standardOutput: "",
+                standardError: ""
+            )
+        }
+    }
 
-        let executablePath = process.executableURL?.path(percentEncoded: false) ?? "<unknown>"
-        let executionState = TimedProcessExecutionState()
+    private func startSession(
+        _ session: TimedProcessRunSession,
+        cancellationBox: TimedProcessTaskCancellationBox
+    ) {
+        cancellationBox.register(completionBox: session.state)
+        if cancellationBox.isCancelled {
+            cancelBeforeLaunch(session)
+            return
+        }
 
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                let resume: @Sendable (ProcessCompletionSnapshot) -> Void = { snapshot in
-                    outputPipe.fileHandleForReading.readabilityHandler = nil
-                    errorPipe.fileHandleForReading.readabilityHandler = nil
-                    let remainingOutput = Self.drainAvailableData(from: outputPipe.fileHandleForReading)
-                    let remainingError = Self.drainAvailableData(from: errorPipe.fileHandleForReading)
-                    if !remainingOutput.isEmpty {
-                        executionState.standardOutput.withLock { $0.append(remainingOutput) }
-                    }
-                    if !remainingError.isEmpty {
-                        executionState.standardError.withLock { $0.append(remainingError) }
-                    }
-                    outputPipe.fileHandleForReading.closeFile()
-                    errorPipe.fileHandleForReading.closeFile()
+        let resume = makeResumeHandler(session: session)
+        let finalizeIfReady = makeFinalizeHandler(state: session.state, resume: resume)
+        let scheduleForcedFinalize = makeForcedFinalizeScheduler(
+            state: session.state,
+            pipeDrainGraceSeconds: session.configuration.pipeDrainGraceSeconds,
+            finalizeIfReady: finalizeIfReady
+        )
+        installReadabilityHandlers(session: session, finalizeIfReady: finalizeIfReady)
+        guard let launch = launchOrFail(session) else { return }
+        if cancellationBox.register(launch: launch) {
+            session.state.markCancelled()
+            cancellationBox.terminateLaunchRegisteredAfterCancellation(launch)
+        }
+        scheduleExitWaiter(
+            launch: launch,
+            state: session.state,
+            pipeDrainGraceSeconds: session.configuration.pipeDrainGraceSeconds,
+            terminationGraceSeconds: session.configuration.terminationGraceSeconds,
+            finalizeIfReady: finalizeIfReady,
+            scheduleForcedFinalize: scheduleForcedFinalize
+        )
+        scheduleDeadlineMonitor(
+            launch: launch,
+            state: session.state,
+            timeoutSeconds: session.configuration.timeoutSeconds,
+            terminationGraceSeconds: session.configuration.terminationGraceSeconds,
+            cancellationCheck: session.configuration.cancellationCheck,
+            scheduleForcedFinalize: scheduleForcedFinalize
+        )
+    }
 
-                    let stdout = String(data: executionState.standardOutput.withLock { $0 }, encoding: .utf8) ?? ""
-                    let stderr = String(data: executionState.standardError.withLock { $0 }, encoding: .utf8) ?? ""
+    private func cancelBeforeLaunch(_ session: TimedProcessRunSession) {
+        session.outputPipe.fileHandleForWriting.closeFile()
+        session.errorPipe.fileHandleForWriting.closeFile()
+        guard session.state.markResumedIfNeeded() else { return }
+        session.outputPipe.fileHandleForReading.readabilityHandler = nil
+        session.errorPipe.fileHandleForReading.readabilityHandler = nil
+        session.outputPipe.fileHandleForReading.closeFile()
+        session.errorPipe.fileHandleForReading.closeFile()
+        session.continuation.resume(throwing: TimedProcessError.cancelled(
+            executablePath: session.configuration.executablePath,
+            standardOutput: "",
+            standardError: ""
+        ))
+    }
 
-                    if snapshot.didCancel {
-                        continuation.resume(throwing: TimedProcessError.cancelled(
-                            executablePath: executablePath,
-                            standardOutput: stdout,
-                            standardError: stderr
-                        ))
-                        return
-                    }
-                    if snapshot.didTimeout {
-                        continuation.resume(throwing: TimedProcessError.timedOut(
-                            executablePath: executablePath,
-                            timeoutSeconds: timeoutSeconds,
-                            standardOutput: stdout,
-                            standardError: stderr
-                        ))
-                        return
-                    }
-                    continuation.resume(returning: TimedProcessResult(
-                        exitCode: snapshot.exitCode,
-                        standardOutput: stdout,
-                        standardError: stderr
-                    ))
-                }
+    private func makeResumeHandler(
+        session: TimedProcessRunSession
+    ) -> @Sendable (TimedProcessCompletionSnapshot) -> Void {
+        { snapshot in
+            session.outputPipe.fileHandleForReading.readabilityHandler = nil
+            session.errorPipe.fileHandleForReading.readabilityHandler = nil
+            let remainingOutput = Self.drainAvailableData(from: session.outputPipe.fileHandleForReading)
+            let remainingError = Self.drainAvailableData(from: session.errorPipe.fileHandleForReading)
+            if !remainingOutput.isEmpty {
+                session.stdoutBuffer.append(remainingOutput)
+            }
+            if !remainingError.isEmpty {
+                session.stderrBuffer.append(remainingError)
+            }
+            session.outputPipe.fileHandleForReading.closeFile()
+            session.errorPipe.fileHandleForReading.closeFile()
 
-                let finalizeIfReady: @Sendable (_ force: Bool) -> Void = { force in
-                    let snapshot = executionState.completion.withLock { completion -> ProcessCompletionSnapshot? in
-                        guard !completion.didResume else { return nil }
-                        guard force || completion.isComplete else { return nil }
-                        completion.didResume = true
-                        return completion.snapshot
-                    }
-                    guard let snapshot else { return }
-                    resume(snapshot)
-                }
+            let stdout = Self.utf8String(from: session.stdoutBuffer.snapshot())
+            let stderr = Self.utf8String(from: session.stderrBuffer.snapshot())
+            if let cancellationCheckFailure = snapshot.cancellationCheckFailure {
+                session.continuation.resume(throwing: TimedProcessError.cancellationCheckFailed(
+                    executablePath: session.configuration.executablePath,
+                    message: cancellationCheckFailure,
+                    standardOutput: stdout,
+                    standardError: stderr
+                ))
+                return
+            }
+            if snapshot.didCancel {
+                session.continuation.resume(throwing: TimedProcessError.cancelled(
+                    executablePath: session.configuration.executablePath,
+                    standardOutput: stdout,
+                    standardError: stderr
+                ))
+                return
+            }
+            if snapshot.didTimeout {
+                session.continuation.resume(throwing: TimedProcessError.timedOut(
+                    executablePath: session.configuration.executablePath,
+                    timeoutSeconds: session.configuration.timeoutSeconds,
+                    standardOutput: stdout,
+                    standardError: stderr
+                ))
+                return
+            }
+            session.continuation.resume(returning: TimedProcessResult(
+                exitCode: snapshot.exitCode,
+                standardOutput: stdout,
+                standardError: stderr
+            ))
+        }
+    }
 
-                let scheduleForcedFinalize: @Sendable () -> Void = {
-                    let shouldSchedule = executionState.completion.withLock { completion -> Bool in
-                        guard !completion.didResume, !completion.forceFinalizeScheduled else { return false }
-                        completion.forceFinalizeScheduled = true
-                        return true
-                    }
-                    guard shouldSchedule else { return }
-                    Task.detached {
-                        do {
-                            try await Self.sleep(seconds: pipeDrainGraceSeconds)
-                        } catch {
-                            return
-                        }
-                        finalizeIfReady(true)
-                    }
-                }
+    private func makeFinalizeHandler(
+        state: TimedProcessCompletionBox,
+        resume: @escaping @Sendable (TimedProcessCompletionSnapshot) -> Void
+    ) -> @Sendable (_ force: Bool) -> Void {
+        { force in
+            let snapshot = state.snapshotIfReady(force: force)
+            guard let snapshot else { return }
+            resume(snapshot)
+        }
+    }
 
-                outputPipe.fileHandleForReading.readabilityHandler = { handle in
-                    let data = handle.availableData
-                    if data.isEmpty {
-                        handle.readabilityHandler = nil
-                        executionState.completion.withLock { $0.stdoutClosed = true }
-                        finalizeIfReady(false)
-                    } else {
-                        executionState.standardOutput.withLock { $0.append(data) }
-                    }
-                }
-
-                errorPipe.fileHandleForReading.readabilityHandler = { handle in
-                    let data = handle.availableData
-                    if data.isEmpty {
-                        handle.readabilityHandler = nil
-                        executionState.completion.withLock { $0.stderrClosed = true }
-                        finalizeIfReady(false)
-                    } else {
-                        executionState.standardError.withLock { $0.append(data) }
-                    }
-                }
-
-                process.terminationHandler = { @Sendable proc in
-                    executionState.completion.withLock {
-                        $0.processTerminated = true
-                        $0.exitCode = proc.terminationStatus
-                    }
-                    finalizeIfReady(false)
-                    scheduleForcedFinalize()
-                }
-
+    private func makeForcedFinalizeScheduler(
+        state: TimedProcessCompletionBox,
+        pipeDrainGraceSeconds: Double,
+        finalizeIfReady: @escaping @Sendable (_ force: Bool) -> Void
+    ) -> @Sendable () -> Void {
+        {
+            guard state.markForcedFinalizeScheduledIfNeeded() else { return }
+            Task.detached { @Sendable in
                 do {
-                    let cancelledBeforeLaunch = executionState.completion.withLock { completion -> ProcessCompletionSnapshot? in
-                        guard completion.didCancel, !completion.didResume else { return nil }
-                        completion.didResume = true
-                        return completion.snapshot
-                    }
-                    if let cancelledBeforeLaunch {
-                        resume(cancelledBeforeLaunch)
-                        return
-                    }
-
-                    try process.run()
-                    #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-                    let processGroupID = process.processIdentifier
-                    if setpgid(processGroupID, processGroupID) == 0 {
-                        executionState.completion.withLock { $0.processGroupID = processGroupID }
-                    }
-                    #endif
-                } catch {
-                    outputPipe.fileHandleForWriting.closeFile()
-                    errorPipe.fileHandleForWriting.closeFile()
-                    let shouldResume = executionState.completion.withLock { completion -> Bool in
-                        guard !completion.didResume else { return false }
-                        completion.didResume = true
-                        return true
-                    }
-                    if shouldResume {
-                        outputPipe.fileHandleForReading.readabilityHandler = nil
-                        errorPipe.fileHandleForReading.readabilityHandler = nil
-                        outputPipe.fileHandleForReading.closeFile()
-                        errorPipe.fileHandleForReading.closeFile()
-                        continuation.resume(throwing: TimedProcessError.launchFailed(
-                            executablePath: executablePath,
-                            message: error.localizedDescription
-                        ))
-                    }
-                    return
-                }
-                outputPipe.fileHandleForWriting.closeFile()
-                errorPipe.fileHandleForWriting.closeFile()
-
-                Task.detached {
-                    let startedAt = Date()
-                    while true {
-                        do {
-                            try await Self.sleep(seconds: 0.1)
-                        } catch {
-                            return
-                        }
-                        let shouldStop = executionState.completion.withLock {
-                            $0.didResume || $0.processTerminated
-                        }
-                        if shouldStop { return }
-                        if Date().timeIntervalSince(startedAt) >= timeoutSeconds {
-                            executionState.completion.withLock { $0.didTimeout = true }
-                            let processGroupID = executionState.completion.withLock { $0.processGroupID }
-                            Self.terminate(process: process, processGroupID: processGroupID)
-                            break
-                        }
-                    }
-
-                    do {
-                        try await Self.sleep(seconds: terminationGraceSeconds)
-                    } catch {
-                        return
-                    }
-                    if executionState.completion.withLock({ $0.didResume }) { return }
-                    if process.isRunning {
-                        let processGroupID = executionState.completion.withLock { $0.processGroupID }
-                        Self.kill(process: process, processGroupID: processGroupID)
-                    }
-                    scheduleForcedFinalize()
-                }
-            }
-        } onCancel: {
-            let shouldTerminate = executionState.completion.withLock { completion -> Bool in
-                guard !completion.didResume else { return false }
-                completion.didCancel = true
-                return true
-            }
-            guard shouldTerminate else { return }
-            if process.isRunning {
-                let processGroupID = executionState.completion.withLock { $0.processGroupID }
-                Self.terminate(process: process, processGroupID: processGroupID)
-            }
-            Task.detached {
-                do {
-                    try await Self.sleep(seconds: terminationGraceSeconds)
+                    try await Self.sleep(seconds: pipeDrainGraceSeconds)
                 } catch {
                     return
                 }
-                if executionState.completion.withLock({ $0.didResume }) { return }
-                if process.isRunning {
-                    let processGroupID = executionState.completion.withLock { $0.processGroupID }
-                    Self.kill(process: process, processGroupID: processGroupID)
-                }
+                finalizeIfReady(true)
             }
         }
+    }
+
+    private func installReadabilityHandlers(
+        session: TimedProcessRunSession,
+        finalizeIfReady: @escaping @Sendable (_ force: Bool) -> Void
+    ) {
+        session.outputPipe.fileHandleForReading.readabilityHandler = { handle in
+            Self.drainAvailableData(
+                from: handle,
+                into: session.stdoutBuffer,
+                markClosed: session.state.markStdoutClosed,
+                finalizeIfReady: finalizeIfReady
+            )
+        }
+        session.errorPipe.fileHandleForReading.readabilityHandler = { handle in
+            Self.drainAvailableData(
+                from: handle,
+                into: session.stderrBuffer,
+                markClosed: session.state.markStderrClosed,
+                finalizeIfReady: finalizeIfReady
+            )
+        }
+    }
+
+    private func launchOrFail(_ session: TimedProcessRunSession) -> TimedProcessLaunch? {
+        do {
+            let processID = try TimedProcessSpawner.spawnInNewProcessGroup(
+                executablePath: session.configuration.executablePath,
+                arguments: session.configuration.arguments,
+                environment: session.configuration.environment,
+                workingDirectory: session.configuration.workingDirectory,
+                outputPipe: session.outputPipe,
+                errorPipe: session.errorPipe
+            )
+            session.outputPipe.fileHandleForWriting.closeFile()
+            session.errorPipe.fileHandleForWriting.closeFile()
+            return TimedProcessLaunch(
+                processID: processID,
+                processGroupID: TimedProcessSpawner.processGroupID(for: processID) ?? processID
+            )
+        } catch {
+            failLaunch(error, session: session)
+            return nil
+        }
+    }
+
+    private func failLaunch(_ error: any Error, session: TimedProcessRunSession) {
+        session.outputPipe.fileHandleForWriting.closeFile()
+        session.errorPipe.fileHandleForWriting.closeFile()
+        guard session.state.markResumedIfNeeded() else { return }
+        session.outputPipe.fileHandleForReading.readabilityHandler = nil
+        session.errorPipe.fileHandleForReading.readabilityHandler = nil
+        session.outputPipe.fileHandleForReading.closeFile()
+        session.errorPipe.fileHandleForReading.closeFile()
+        session.continuation.resume(throwing: TimedProcessError.launchFailed(
+            executablePath: session.configuration.executablePath,
+            message: String(describing: error)
+        ))
+    }
+
+    private func scheduleExitWaiter(
+        launch: TimedProcessLaunch,
+        state: TimedProcessCompletionBox,
+        pipeDrainGraceSeconds: Double,
+        terminationGraceSeconds: Double,
+        finalizeIfReady: @escaping @Sendable (_ force: Bool) -> Void,
+        scheduleForcedFinalize: @escaping @Sendable () -> Void
+    ) {
+        Thread {
+            let exitCode = TimedProcessSpawner.waitForProcessExit(processID: launch.processID)
+            Task.detached { @Sendable in
+                state.markProcessTerminated(exitCode: exitCode)
+                await Self.waitForPipeDrainIfNeeded(state: state, pipeDrainGraceSeconds: pipeDrainGraceSeconds)
+                await Self.cleanupProcessGroupAfterExitIfNeeded(
+                    launch: launch,
+                    terminationGraceSeconds: terminationGraceSeconds
+                )
+                state.markProcessGroupCleanupComplete()
+                finalizeIfReady(false)
+                scheduleForcedFinalize()
+            }
+        }.start()
+    }
+
+    private func scheduleDeadlineMonitor(
+        launch: TimedProcessLaunch,
+        state: TimedProcessCompletionBox,
+        timeoutSeconds: Double,
+        terminationGraceSeconds: Double,
+        cancellationCheck: (@Sendable () async throws -> Bool)?,
+        scheduleForcedFinalize: @escaping @Sendable () -> Void
+    ) {
+        Task.detached { @Sendable in
+            let signalled = await Self.monitorUntilDeadline(
+                launch: launch,
+                state: state,
+                timeoutSeconds: timeoutSeconds,
+                cancellationCheck: cancellationCheck
+            )
+            guard signalled else { return }
+            await Self.killAfterGraceIfStillRunning(
+                launch: launch,
+                terminationGraceSeconds: terminationGraceSeconds
+            )
+            scheduleForcedFinalize()
+        }
+    }
+
+    private static func drainAvailableData(
+        from handle: FileHandle,
+        into buffer: TimedProcessOutputBuffer,
+        markClosed: @escaping @Sendable () -> Void,
+        finalizeIfReady: @escaping @Sendable (_ force: Bool) -> Void
+    ) {
+        let data = handle.availableData
+        if data.isEmpty {
+            handle.readabilityHandler = nil
+            markClosed()
+            finalizeIfReady(false)
+        } else {
+            buffer.append(data)
+        }
+    }
+
+    private static func waitForPipeDrainIfNeeded(
+        state: TimedProcessCompletionBox,
+        pipeDrainGraceSeconds: Double
+    ) async {
+        guard !state.pipesClosed else { return }
+        do {
+            try await sleep(seconds: pipeDrainGraceSeconds)
+        } catch {
+            return
+        }
+    }
+
+    private static func cleanupProcessGroupAfterExitIfNeeded(
+        launch: TimedProcessLaunch,
+        terminationGraceSeconds: Double
+    ) async {
+        guard TimedProcessSpawner.isProcessGroupAlive(launch.processGroupID) else { return }
+        let didSignalProcessGroup = TimedProcessSpawner.sendSignalToProcessGroup(
+            processID: launch.processID,
+            processGroupID: launch.processGroupID,
+            signal: SIGTERM
+        )
+        guard didSignalProcessGroup else { return }
+        do {
+            try await sleep(seconds: terminationGraceSeconds)
+        } catch {
+            return
+        }
+        if TimedProcessSpawner.isProcessGroupAlive(launch.processGroupID) {
+            _ = TimedProcessSpawner.sendSignalToProcessGroup(
+                processID: launch.processID,
+                processGroupID: launch.processGroupID,
+                signal: SIGKILL
+            )
+        }
+    }
+
+    private static func monitorUntilDeadline(
+        launch: TimedProcessLaunch,
+        state: TimedProcessCompletionBox,
+        timeoutSeconds: Double,
+        cancellationCheck: (@Sendable () async throws -> Bool)?
+    ) async -> Bool {
+        let startedAt = Date()
+        while true {
+            do {
+                try await sleep(seconds: 0.1)
+            } catch {
+                return false
+            }
+            if state.shouldStopMonitoring { return false }
+            if let cancellationCheck {
+                do {
+                    if try await cancellationCheck() {
+                        signalDeadline(launch: launch, state: state, markDeadline: state.markCancelled)
+                        return true
+                    }
+                } catch {
+                    signalDeadline(launch: launch, state: state) {
+                        state.markCancellationCheckFailed(String(describing: error))
+                    }
+                    return true
+                }
+            }
+            if Date().timeIntervalSince(startedAt) >= timeoutSeconds {
+                signalDeadline(launch: launch, state: state, markDeadline: state.markTimedOut)
+                return true
+            }
+        }
+    }
+
+    private static func signalDeadline(
+        launch: TimedProcessLaunch,
+        state: TimedProcessCompletionBox,
+        markDeadline: @escaping @Sendable () -> Void
+    ) {
+        markDeadline()
+        _ = TimedProcessSpawner.sendSignalToProcessGroup(
+            processID: launch.processID,
+            processGroupID: launch.processGroupID,
+            signal: SIGTERM
+        )
+    }
+
+    private static func killAfterGraceIfStillRunning(
+        launch: TimedProcessLaunch,
+        terminationGraceSeconds: Double
+    ) async {
+        do {
+            try await sleep(seconds: terminationGraceSeconds)
+        } catch {
+            return
+        }
+        guard TimedProcessSpawner.isProcessGroupAlive(launch.processGroupID) else { return }
+        _ = TimedProcessSpawner.sendSignalToProcessGroup(
+            processID: launch.processID,
+            processGroupID: launch.processGroupID,
+            signal: SIGKILL
+        )
     }
 
     private static func sleep(seconds: Double) async throws {
@@ -312,112 +544,7 @@ public struct TimedProcessRunner: Sendable {
         #endif
     }
 
-    private static func terminate(process: Process, processGroupID: pid_t?) {
-        #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-        signalProcessTree(rootPID: process.processIdentifier, processGroupID: processGroupID, signal: SIGTERM)
-        if let processGroupID {
-            Darwin.kill(-processGroupID, SIGTERM)
-        } else {
-            process.terminate()
-        }
-        #else
-        process.terminate()
-        #endif
+    private static func utf8String(from data: Data) -> String {
+        String(decoding: data, as: UTF8.self)
     }
-
-    private static func kill(process: Process, processGroupID: pid_t?) {
-        #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-        signalProcessTree(rootPID: process.processIdentifier, processGroupID: processGroupID, signal: SIGKILL)
-        if let processGroupID {
-            Darwin.kill(-processGroupID, SIGKILL)
-        } else {
-            Darwin.kill(process.processIdentifier, SIGKILL)
-        }
-        #else
-        process.terminate()
-        #endif
-    }
-
-    #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS)
-    private static func signalProcessTree(rootPID: pid_t, processGroupID: pid_t?, signal: Int32) {
-        let descendants = descendantProcessIDs(of: rootPID)
-        for pid in descendants.reversed() {
-            Darwin.kill(pid, signal)
-        }
-        Darwin.kill(rootPID, signal)
-        if let processGroupID {
-            Darwin.kill(-processGroupID, signal)
-        }
-    }
-
-    private static func descendantProcessIDs(of rootPID: pid_t) -> [pid_t] {
-        let process = Process()
-        process.executableURL = URL(filePath: "/bin/ps")
-        process.arguments = ["-axo", "pid=,ppid="]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return []
-        }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        pipe.fileHandleForReading.closeFile()
-        let output = String(data: data, encoding: .utf8) ?? ""
-        var childrenByParent: [pid_t: [pid_t]] = [:]
-        for line in output.split(whereSeparator: \.isNewline) {
-            let parts = line.split(whereSeparator: \.isWhitespace)
-            guard parts.count == 2,
-                  let pid = pid_t(String(parts[0])),
-                  let parent = pid_t(String(parts[1])) else {
-                continue
-            }
-            childrenByParent[parent, default: []].append(pid)
-        }
-
-        var result: [pid_t] = []
-        var stack = childrenByParent[rootPID] ?? []
-        while let pid = stack.popLast() {
-            result.append(pid)
-            stack.append(contentsOf: childrenByParent[pid] ?? [])
-        }
-        return result
-    }
-    #endif
-}
-
-private final class TimedProcessExecutionState: Sendable {
-    let standardOutput = Mutex(Data())
-    let standardError = Mutex(Data())
-    let completion = Mutex(ProcessCompletionState())
-}
-
-private struct ProcessCompletionState: Sendable {
-    var stdoutClosed = false
-    var stderrClosed = false
-    var processTerminated = false
-    var exitCode: Int32 = 0
-    var processGroupID: pid_t?
-    var didTimeout = false
-    var didCancel = false
-    var didResume = false
-    var forceFinalizeScheduled = false
-
-    var isComplete: Bool {
-        stdoutClosed && stderrClosed && processTerminated
-    }
-
-    var snapshot: ProcessCompletionSnapshot {
-        ProcessCompletionSnapshot(exitCode: exitCode, didTimeout: didTimeout, didCancel: didCancel)
-    }
-}
-
-private struct ProcessCompletionSnapshot: Sendable {
-    let exitCode: Int32
-    let didTimeout: Bool
-    let didCancel: Bool
 }

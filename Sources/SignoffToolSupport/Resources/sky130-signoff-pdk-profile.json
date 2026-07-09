@@ -1,0 +1,175 @@
+{
+  "candidateRootPaths" : [
+    "~/.volare/sky130A",
+    "~/.volare/sky130/versions",
+    "~/.volare/volare/sky130/versions"
+  ],
+  "deckRequirements" : [
+    {
+      "backendID" : "magic",
+      "deckID" : "sky130.magic.drc",
+      "domain" : "drc",
+      "pdkRequirement" : "magic",
+      "requiredCoverageTags" : [
+        "drc.deck.sky130",
+        "drc.deck.rule-table",
+        "drc.deck.cut-classes",
+        "drc.deck.contact-geometry",
+        "drc.deck.exact-overlap",
+        "drc.deck.enclosed-hole",
+        "drc.deck.unit-scaling"
+      ]
+    },
+    {
+      "backendID" : "netgen",
+      "deckID" : "sky130.netgen.lvs",
+      "domain" : "lvs",
+      "pdkRequirement" : "netgen",
+      "requiredCoverageTags" : [
+        "lvs.deck.sky130",
+        "lvs.deck.device-map",
+        "lvs.deck.pin-map"
+      ]
+    }
+  ],
+  "pdkID" : "sky130A",
+  "profileID" : "sky130.open-pdk.signoff",
+  "requirements" : [
+    {
+      "relativePath" : "libs.tech/magic/sky130A.magicrc",
+      "requirementID" : "magic"
+    },
+    {
+      "relativePath" : "libs.tech/magic/sky130A.tech",
+      "requirementID" : "magic-tech"
+    },
+    {
+      "relativePath" : "libs.tech/netgen/sky130A_setup.tcl",
+      "requirementID" : "netgen"
+    },
+    {
+      "relativePath" : "libs.ref/{library}/spice/{library}.spice",
+      "requirementID" : "standard-cell-spice-library"
+    }
+  ],
+  "rootDirectoryName" : "sky130A",
+  "schemaVersion" : 1,
+  "standardCellLibraries" : [
+    {
+      "libraryID" : "sky130_fd_sc_hd",
+      "spiceDeckRequirementID" : "standard-cell-spice-library"
+    }
+  ],
+  "semanticChecks" : [
+    {
+      "blockedCode" : "magic_tech_deck_missing",
+      "evaluator" : "magic-tech-available",
+      "sourceRoles" : [
+        "magic-tech"
+      ],
+      "tag" : "drc.deck.sky130"
+    },
+    {
+      "blockedCode" : "magic_drc_rule_family_missing",
+      "evaluator" : "magic-required-rule-families-present",
+      "requiredValues" : [
+        "width",
+        "spacing",
+        "surround",
+        "overhang",
+        "area",
+        "widespacing"
+      ],
+      "sourceRoles" : [
+        "magic-tech"
+      ],
+      "tag" : "drc.deck.rule-table"
+    },
+    {
+      "blockedCode" : "magic_cut_class_missing",
+      "evaluator" : "magic-cut-classes-present",
+      "sourceRoles" : [
+        "magic-tech"
+      ],
+      "tag" : "drc.deck.cut-classes"
+    },
+    {
+      "blockedCode" : "magic_contact_geometry_missing",
+      "evaluator" : "magic-contact-geometry-present",
+      "sourceRoles" : [
+        "magic-tech"
+      ],
+      "tag" : "drc.deck.contact-geometry"
+    },
+    {
+      "blockedCode" : "magic_exact_overlap_missing",
+      "evaluator" : "magic-exact-overlap-present",
+      "sourceRoles" : [
+        "magic-tech"
+      ],
+      "tag" : "drc.deck.exact-overlap"
+    },
+    {
+      "blockedCode" : "magic_enclosed_hole_missing",
+      "evaluator" : "magic-enclosed-hole-present",
+      "sourceRoles" : [
+        "magic-tech"
+      ],
+      "tag" : "drc.deck.enclosed-hole"
+    },
+    {
+      "blockedCode" : "magic_unit_scaling_evidence_missing",
+      "evaluator" : "magic-unit-scaling-present",
+      "sourceRoles" : [
+        "magicrc"
+      ],
+      "tag" : "drc.deck.unit-scaling"
+    },
+    {
+      "blockedCode" : "netgen_setup_missing",
+      "evaluator" : "netgen-setup-available",
+      "sourceRoles" : [
+        "netgen-setup"
+      ],
+      "tag" : "lvs.deck.sky130"
+    },
+    {
+      "blockedCode" : "netgen_device_family_missing",
+      "evaluator" : "netgen-required-device-families-present",
+      "requiredValues" : [
+        "mos",
+        "resistor",
+        "diode",
+        "capacitor",
+        "bjt",
+        "inductor"
+      ],
+      "sourceRoles" : [
+        "netgen-setup"
+      ],
+      "tag" : "lvs.deck.device-map"
+    },
+    {
+      "blockedCode" : "netgen_pin_policy_missing",
+      "evaluator" : "netgen-pin-policy-present",
+      "sourceRoles" : [
+        "netgen-setup"
+      ],
+      "tag" : "lvs.deck.pin-map"
+    }
+  ],
+  "semanticSources" : [
+    {
+      "requirementID" : "magic",
+      "role" : "magicrc"
+    },
+    {
+      "requirementID" : "magic-tech",
+      "role" : "magic-tech"
+    },
+    {
+      "requirementID" : "netgen",
+      "role" : "netgen-setup"
+    }
+  ]
+}

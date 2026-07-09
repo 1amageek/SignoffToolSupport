@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "signoff-pdk-profile-catalog",
+  "catalogID": "signoff.default-pdk-profiles.v1",
+  "profiles": [
+    {
+      "profileID": "sky130.open-pdk.signoff",
+      "displayName": "Sky130 Open PDK signoff profile",
+      "pdkID": "sky130A",
+      "profileResourceName": "sky130-signoff-pdk-profile",
+      "defaultProfile": true
+    }
+  ]
+}

@@ -8,7 +8,10 @@ let package = Package(
         .library(name: "SignoffToolSupport", targets: ["SignoffToolSupport"]),
     ],
     targets: [
-        .target(name: "SignoffToolSupport"),
+        .target(
+            name: "SignoffToolSupport",
+            resources: [.process("Resources")]
+        ),
         .testTarget(name: "SignoffToolSupportTests", dependencies: ["SignoffToolSupport"]),
     ]
 )
