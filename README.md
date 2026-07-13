@@ -5,6 +5,27 @@ process execution safety, profile-driven PDK discovery, and lightweight readines
 inventories for external signoff decks. Domain engines still own DRC, LVS, and
 PEX rule semantics.
 
+## CircuiteFoundation boundary
+
+`SignoffToolSupport` now uses `CircuiteFoundation` for the cross-package
+execution contract. `TimedProcessRunner` remains responsible for process
+timeout, cancellation, and process-tree cleanup; the Foundation seam carries
+artifact references, provenance, and structured diagnostics.
+
+```mermaid
+flowchart LR
+  Request["SignoffToolRequest\nProducerIdentity + ArtifactReference[]"] --> Runner["TimedProcessRunner"]
+  Runner --> Engine["SignoffToolEngine"]
+  Engine --> Result["SignoffToolResult"]
+  Result --> Evidence["EvidenceManifest"]
+  Result --> Diagnostics["DesignDiagnostic[]"]
+```
+
+Concrete DRC/LVS/PEX packages should implement `SignoffToolEngine` and use
+`SignoffToolResult` as their artifact hand-off. PDK profile models and the
+legacy deck-readiness reports remain local to this support package; they do not
+become part of the shared Foundation vocabulary.
+
 ## Types
 
 | Type | Responsibility |

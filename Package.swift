@@ -7,9 +7,15 @@ let package = Package(
     products: [
         .library(name: "SignoffToolSupport", targets: ["SignoffToolSupport"]),
     ],
+    dependencies: [
+        .package(path: "../CircuiteFoundation"),
+    ],
     targets: [
         .target(
             name: "SignoffToolSupport",
+            dependencies: [
+                .product(name: "CircuiteFoundation", package: "CircuiteFoundation"),
+            ],
             resources: [.process("Resources")]
         ),
         .testTarget(name: "SignoffToolSupportTests", dependencies: ["SignoffToolSupport"]),
