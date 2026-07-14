@@ -5,6 +5,13 @@ process execution safety, profile-driven PDK discovery, and lightweight readines
 inventories for external signoff decks. Domain engines still own DRC, LVS, and
 PEX rule semantics.
 
+## Xcircuite integration
+
+[`Xcircuite`](https://github.com/1amageek/Xcircuite) is the umbrella runtime
+that composes this package with the DRC, LVS, and PEX stage executors. The
+support package remains responsible for safe process execution, PDK discovery,
+and readiness inventories; it does not own flow lifecycle or project storage.
+
 ## CircuiteFoundation boundary
 
 `SignoffToolSupport` now uses `CircuiteFoundation` for the cross-package
