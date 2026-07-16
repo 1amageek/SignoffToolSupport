@@ -1,4 +1,4 @@
-@_exported import CircuiteFoundation
+import CircuiteFoundation
 
 /// Artifact-oriented input boundary for an external signoff tool invocation.
 ///
