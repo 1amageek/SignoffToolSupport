@@ -82,7 +82,7 @@ public struct SignoffPDKProfileCatalog: Codable, Sendable, Hashable {
             pdkID = try container.decodeIfPresent(String.self, forKey: .pdkID)
             profileResourceName = try container.decodeIfPresent(String.self, forKey: .profileResourceName)
             profilePath = try container.decodeIfPresent(String.self, forKey: .profilePath)
-            defaultProfile = try container.decodeIfPresent(Bool.self, forKey: .defaultProfile) ?? false
+            defaultProfile = try container.decode(Bool.self, forKey: .defaultProfile)
         }
     }
 

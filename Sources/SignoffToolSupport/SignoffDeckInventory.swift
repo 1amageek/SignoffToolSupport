@@ -38,6 +38,8 @@ public struct SignoffDeckRequirement: Codable, Sendable, Hashable {
 }
 
 public struct SignoffDeckResult: Codable, Sendable, Hashable {
+    public static let currentSchemaVersion = 1
+
     public let schemaVersion: Int
     public let deckID: String
     public let domain: String
@@ -51,7 +53,7 @@ public struct SignoffDeckResult: Codable, Sendable, Hashable {
     public let diagnostics: [SignoffDeckDiagnostic]
 
     public init(
-        schemaVersion: Int = 1,
+        schemaVersion: Int = Self.currentSchemaVersion,
         deckID: String,
         domain: String,
         backendID: String,
@@ -74,6 +76,34 @@ public struct SignoffDeckResult: Codable, Sendable, Hashable {
         self.requiredFileExists = requiredFileExists
         self.requiredCoverageTags = requiredCoverageTags
         self.diagnostics = diagnostics
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, deckID, domain, backendID, pdkRequirement, status
+        case pdkRoot, requiredFile, requiredFileExists, requiredCoverageTags, diagnostics
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        guard schemaVersion == Self.currentSchemaVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "Unsupported signoff deck result schema version \(schemaVersion)."
+            )
+        }
+        self.schemaVersion = schemaVersion
+        deckID = try container.decode(String.self, forKey: .deckID)
+        domain = try container.decode(String.self, forKey: .domain)
+        backendID = try container.decode(String.self, forKey: .backendID)
+        pdkRequirement = try container.decode(String.self, forKey: .pdkRequirement)
+        status = try container.decode(SignoffDeckStatus.self, forKey: .status)
+        pdkRoot = try container.decodeIfPresent(String.self, forKey: .pdkRoot)
+        requiredFile = try container.decodeIfPresent(String.self, forKey: .requiredFile)
+        requiredFileExists = try container.decode(Bool.self, forKey: .requiredFileExists)
+        requiredCoverageTags = try container.decode([String].self, forKey: .requiredCoverageTags)
+        diagnostics = try container.decode([SignoffDeckDiagnostic].self, forKey: .diagnostics)
     }
 }
 
@@ -100,6 +130,8 @@ public struct SignoffDeckFailure: Codable, Sendable, Hashable {
 }
 
 public struct SignoffDeckInventoryReport: Codable, Sendable, Hashable {
+    public static let currentSchemaVersion = 1
+
     public let schemaVersion: Int
     public let kind: String
     public let generatedAt: String
@@ -111,7 +143,7 @@ public struct SignoffDeckInventoryReport: Codable, Sendable, Hashable {
     public let failures: [SignoffDeckFailure]
 
     public init(
-        schemaVersion: Int = 1,
+        schemaVersion: Int = Self.currentSchemaVersion,
         kind: String = "signoff-foundry-deck-readiness",
         generatedAt: String,
         status: SignoffDeckStatus,
@@ -130,6 +162,32 @@ public struct SignoffDeckInventoryReport: Codable, Sendable, Hashable {
         self.blockedDeckCount = blockedDeckCount
         self.results = results
         self.failures = failures
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, kind, generatedAt, status, checkedDeckCount
+        case passedDeckCount, blockedDeckCount, results, failures
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        guard schemaVersion == Self.currentSchemaVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "Unsupported signoff deck inventory schema version \(schemaVersion)."
+            )
+        }
+        self.schemaVersion = schemaVersion
+        kind = try container.decode(String.self, forKey: .kind)
+        generatedAt = try container.decode(String.self, forKey: .generatedAt)
+        status = try container.decode(SignoffDeckStatus.self, forKey: .status)
+        checkedDeckCount = try container.decode(Int.self, forKey: .checkedDeckCount)
+        passedDeckCount = try container.decode(Int.self, forKey: .passedDeckCount)
+        blockedDeckCount = try container.decode(Int.self, forKey: .blockedDeckCount)
+        results = try container.decode([SignoffDeckResult].self, forKey: .results)
+        failures = try container.decode([SignoffDeckFailure].self, forKey: .failures)
     }
 }
 

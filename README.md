@@ -30,7 +30,7 @@ flowchart LR
 
 Concrete DRC/LVS/PEX packages should implement `SignoffToolEngine` and use
 `SignoffToolResult` as their artifact hand-off. PDK profile models and the
-legacy deck-readiness reports remain local to this support package; they do not
+deck-readiness reports remain local to this support package; they do not
 become part of the shared Foundation vocabulary.
 
 ## Types
@@ -43,8 +43,8 @@ become part of the shared Foundation vocabulary.
 | `SignoffPDKLocator` | Resolves a PDK root and required files from `SignoffPDKProfile` data instead of process-specific Swift constants |
 | `SignoffDeckInventory` | Emits the `signoff-foundry-deck-readiness` API report from profile-declared deck requirements, including `blocked` diagnostics when required PDK assets are missing |
 | `SignoffDeckSemanticInventory` | Emits the `signoff-foundry-deck-semantics` API report from profile-declared semantic sources and coverage checks while keeping Magic / Netgen dialect summary parsing in Swift; Magic DRC summaries include cut classes, contact-stack connectivity, wiring contact geometry, exact overlap, enclosed-hole patterns, and unit scaling |
-| `Resources/signoff-pdk-profile-catalog.json` | Default selectable signoff PDK profile inventory; it points at compatibility profile resources as data |
-| `Resources/sky130-signoff-pdk-profile.json` | Compatibility profile data for Sky130 Open PDK required files, standard-cell SPICE deck template, and semantic checks; this is data, not a process-specific implementation owner |
+| `Resources/signoff-pdk-profile-catalog.json` | Default selectable signoff PDK profile inventory; it points at profile resources as data |
+| `Resources/sky130-signoff-pdk-profile.json` | Sky130 Open PDK profile data for required files, standard-cell SPICE deck templates, and semantic checks; this is data, not a process-specific implementation owner |
 
 ## Rules
 

@@ -54,6 +54,20 @@ public struct TimedProcessRunner: Sendable {
         self.pipeDrainGraceSeconds = pipeDrainGraceSeconds
     }
 
+    public func run(
+        executableURL: URL,
+        arguments: [String] = [],
+        environment: [String: String]? = nil,
+        workingDirectory: URL? = nil
+    ) async throws -> TimedProcessResult {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.environment = environment
+        process.currentDirectoryURL = workingDirectory
+        return try await run(process: process)
+    }
+
     public func run(process: Process) async throws -> TimedProcessResult {
         try await run(process: process, cancellationCheck: nil)
     }

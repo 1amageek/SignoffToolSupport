@@ -159,6 +159,24 @@ struct SignoffDeckSemanticInventoryTests {
         #expect(decoded.failures.isEmpty)
     }
 
+    @Test func rejectsUnsupportedReportSchema() throws {
+        let report = SignoffDeckSemanticReport(
+            schemaVersion: 2,
+            generatedAt: "2026-06-23T00:00:00Z",
+            status: .passed,
+            pdkRoot: nil,
+            sources: [],
+            magicDRC: nil,
+            netgenLVS: nil,
+            coverageTagResults: [],
+            failures: []
+        )
+        let data = try JSONEncoder().encode(report)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(SignoffDeckSemanticReport.self, from: data)
+        }
+    }
+
     private func makeTemporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "SignoffDeckSemanticInventoryTests-\(UUID().uuidString)")

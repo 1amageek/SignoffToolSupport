@@ -10,6 +10,40 @@ import Darwin
 @Suite("Timed process runner")
 struct TimedProcessRunnerTests {
     @Test(.timeLimit(.minutes(1)))
+    func executableConveniencePreservesArgumentsEnvironmentAndWorkingDirectory() async throws {
+        let workingDirectory = FileManager.default.temporaryDirectory
+            .appending(path: "TimedProcessRunnerConvenience-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: workingDirectory,
+            withIntermediateDirectories: true
+        )
+        defer {
+            do {
+                try FileManager.default.removeItem(at: workingDirectory)
+            } catch {
+                Issue.record("Failed to remove process-runner fixture: \(error)")
+            }
+        }
+
+        let result = try await TimedProcessRunner(timeoutSeconds: 5).run(
+            executableURL: URL(filePath: "/bin/sh"),
+            arguments: ["-c", "printf '%s\\n' \"$RUNNER_VALUE\"; : > runner-marker"],
+            environment: ["RUNNER_VALUE": "canonical-runner"],
+            workingDirectory: workingDirectory
+        )
+
+        #expect(result.exitCode == 0)
+        let lines = result.standardOutput.split(separator: "\n").map(String.init)
+        #expect(lines == ["canonical-runner"])
+        #expect(
+            FileManager.default.fileExists(
+                atPath: workingDirectory.appending(path: "runner-marker").path(percentEncoded: false)
+            )
+        )
+        #expect(result.standardError.isEmpty)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func cancellationKillsProcessGroupThatIgnoresTerminate() async throws {
         let process = Process()
         process.executableURL = URL(filePath: "/bin/sh")

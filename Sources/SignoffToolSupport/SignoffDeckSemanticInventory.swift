@@ -109,6 +109,8 @@ public struct SignoffDeckSemanticFailure: Codable, Sendable, Hashable {
 }
 
 public struct SignoffDeckSemanticReport: Codable, Sendable, Hashable {
+    public static let currentSchemaVersion = 1
+
     public let schemaVersion: Int
     public let kind: String
     public let generatedAt: String
@@ -121,7 +123,7 @@ public struct SignoffDeckSemanticReport: Codable, Sendable, Hashable {
     public let failures: [SignoffDeckSemanticFailure]
 
     public init(
-        schemaVersion: Int = 1,
+        schemaVersion: Int = Self.currentSchemaVersion,
         kind: String = "signoff-foundry-deck-semantics",
         generatedAt: String,
         status: SignoffDeckStatus,
@@ -142,6 +144,33 @@ public struct SignoffDeckSemanticReport: Codable, Sendable, Hashable {
         self.netgenLVS = netgenLVS
         self.coverageTagResults = coverageTagResults
         self.failures = failures
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, kind, generatedAt, status, pdkRoot, sources
+        case magicDRC, netgenLVS, coverageTagResults, failures
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        guard schemaVersion == Self.currentSchemaVersion else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "Unsupported signoff deck semantic report schema version \(schemaVersion)."
+            )
+        }
+        self.schemaVersion = schemaVersion
+        kind = try container.decode(String.self, forKey: .kind)
+        generatedAt = try container.decode(String.self, forKey: .generatedAt)
+        status = try container.decode(SignoffDeckStatus.self, forKey: .status)
+        pdkRoot = try container.decodeIfPresent(String.self, forKey: .pdkRoot)
+        sources = try container.decode([SignoffDeckSemanticSource].self, forKey: .sources)
+        magicDRC = try container.decodeIfPresent(MagicDRCSemanticSummary.self, forKey: .magicDRC)
+        netgenLVS = try container.decodeIfPresent(NetgenLVSSemanticSummary.self, forKey: .netgenLVS)
+        coverageTagResults = try container.decode([SignoffDeckSemanticCoverage].self, forKey: .coverageTagResults)
+        failures = try container.decode([SignoffDeckSemanticFailure].self, forKey: .failures)
     }
 }
 

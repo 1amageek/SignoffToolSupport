@@ -46,7 +46,8 @@ struct SignoffPDKProfileCatalogTests {
             },
             {
               "profileID": "profile-1",
-              "profileResourceName": "profile-b"
+              "profileResourceName": "profile-b",
+              "defaultProfile": false
             }
           ]
         }
@@ -54,6 +55,26 @@ struct SignoffPDKProfileCatalogTests {
 
         #expect(throws: SignoffPDKProfileCatalogError.duplicateProfileID("profile-1")) {
             _ = try SignoffPDKProfileCatalog.load(from: url)
+        }
+    }
+
+    @Test func rejectsCatalogEntryWithoutCurrentDefaultMarker() throws {
+        let data = Data("""
+        {
+          "schemaVersion": 1,
+          "kind": "signoff-pdk-profile-catalog",
+          "catalogID": "incomplete-catalog",
+          "profiles": [
+            {
+              "profileID": "profile-1",
+              "profileResourceName": "profile-a"
+            }
+          ]
+        }
+        """.utf8)
+
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(SignoffPDKProfileCatalog.self, from: data)
         }
     }
 

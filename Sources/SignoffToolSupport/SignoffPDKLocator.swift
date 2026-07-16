@@ -77,7 +77,7 @@ public struct SignoffPDKProfile: Codable, Sendable, Hashable {
     public let semanticChecks: [SignoffDeckSemanticCheck]
 
     public init(
-        schemaVersion: Int = 1,
+        schemaVersion: Int = Self.currentSchemaVersion,
         profileID: String,
         pdkID: String,
         rootDirectoryName: String?,
@@ -122,10 +122,10 @@ public struct SignoffPDKProfile: Codable, Sendable, Hashable {
         rootDirectoryName = try container.decodeIfPresent(String.self, forKey: .rootDirectoryName)
         candidateRootPaths = try container.decode([String].self, forKey: .candidateRootPaths)
         requirements = try container.decode([SignoffPDKRequiredFile].self, forKey: .requirements)
-        standardCellLibraries = try container.decodeIfPresent(
+        standardCellLibraries = try container.decode(
             [SignoffPDKStandardCellLibrary].self,
             forKey: .standardCellLibraries
-        ) ?? []
+        )
         deckRequirements = try container.decode([SignoffDeckRequirement].self, forKey: .deckRequirements)
         semanticSources = try container.decode([SignoffDeckSemanticSourceRequirement].self, forKey: .semanticSources)
         semanticChecks = try container.decode([SignoffDeckSemanticCheck].self, forKey: .semanticChecks)
