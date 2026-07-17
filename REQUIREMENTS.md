@@ -4,10 +4,10 @@
 
 | ID | Requirement |
 |---|---|
-| STS-001 | Build independently with a local `CircuiteFoundation` dependency. |
-| STS-002 | Expose `SignoffToolEngine` as the shared asynchronous adapter boundary. |
-| STS-003 | Keep `SignoffToolRequest` and `SignoffToolResult` `Sendable`, `Hashable`, and `Codable`. |
-| STS-004 | Require digest-bearing Foundation artifact references at the cross-package boundary. |
+| STS-001 | Build independently without a domain-engine or flow-runtime dependency. |
+| STS-002 | Expose typed process execution with stdout, stderr, and exit status. |
+| STS-003 | Allow domain engines to inject cancellation checks without importing flow state. |
+| STS-004 | Keep generic signoff request, result, evidence, and verdict contracts in their owning domain packages. |
 | STS-005 | Preserve typed timeout, launch, cancellation, and process-tree cleanup behavior. |
 | STS-006 | Reject invalid timeout/grace configurations before launching an external process. |
 | STS-007 | Resolve PDK files from profile data with safe relative-path checks and explicit missing-asset diagnostics. |
@@ -17,14 +17,12 @@
 ## Quality and acceptance criteria
 
 - `swift build` succeeds in the package checkout.
-- The current regression baseline remains green: 33 tests pass under
-  `swift test --parallel`.
+- The current regression baseline remains green: 37 tests pass through the
+  timeout-bounded Xcode package scheme.
 - A process cancellation or timeout must terminate the complete process group,
   not only the direct child.
-- A result must distinguish process execution status from signoff qualification
-  and must not claim approval without external evidence.
-- Artifact references must be created from materialized files and preserve
-  byte-count and digest integrity metadata.
+- Process execution status remains distinct from every domain signoff verdict
+  and qualification decision.
 
 ## Non-goals
 
@@ -36,7 +34,7 @@
 
 ## Next-agent acceptance gate
 
-An implementation agent is complete when its domain adapter conforms to
-`SignoffToolEngine`, routes launches through `TimedProcessRunner`, emits a
-reproducible Foundation-backed result, and preserves the fail-closed behavior
-documented above.
+An implementation agent is complete when its implementation conforms directly
+to the owning domain protocol, routes external launches through
+`TimedProcessRunner`, emits the domain's reproducible Foundation-backed result,
+and preserves the fail-closed behavior documented above.

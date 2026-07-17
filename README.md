@@ -12,26 +12,23 @@ that composes this package with the DRC, LVS, and PEX stage executors. The
 support package remains responsible for safe process execution, PDK discovery,
 and readiness inventories; it does not own flow lifecycle or project storage.
 
-## CircuiteFoundation boundary
+## Domain integration
 
-`SignoffToolSupport` now uses `CircuiteFoundation` for the cross-package
-execution contract. `TimedProcessRunner` remains responsible for process
-timeout, cancellation, and process-tree cleanup; the Foundation seam carries
-artifact references, provenance, and structured diagnostics.
+`TimedProcessRunner` provides process timeout, cancellation, output capture,
+and process-tree cleanup. Each domain engine owns its request, result,
+artifacts, provenance, diagnostics, parsing, and signoff semantics.
 
 ```mermaid
 flowchart LR
-  Request["SignoffToolRequest\nProducerIdentity + ArtifactReference[]"] --> Runner["TimedProcessRunner"]
-  Runner --> Engine["SignoffToolEngine"]
-  Engine --> Result["SignoffToolResult"]
-  Result --> Evidence["EvidenceManifest"]
-  Result --> Diagnostics["DesignDiagnostic[]"]
+  Domain["DRC / LVS / PEX engine"] --> Runner["TimedProcessRunner"]
+  Runner --> Tool["External signoff tool"]
+  Tool --> Output["TimedProcessResult"]
+  Output --> Domain
 ```
 
-Concrete DRC/LVS/PEX packages should implement `SignoffToolEngine` and use
-`SignoffToolResult` as their artifact hand-off. PDK profile models and the
-deck-readiness reports remain local to this support package; they do not
-become part of the shared Foundation vocabulary.
+Concrete DRC/LVS/PEX implementations inject or compose `TimedProcessRunner`
+while conforming directly to their own domain protocols. This package does not
+define a generic signoff engine, request, result, or evidence envelope.
 
 ## Types
 
@@ -59,5 +56,8 @@ become part of the shared Foundation vocabulary.
 
 ```bash
 swift build
-swift test
+perl -e 'alarm shift; exec @ARGV' 30 xcodebuild test \
+  -scheme SignoffToolSupport \
+  -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO
 ```

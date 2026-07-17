@@ -13,34 +13,24 @@ evidence.
 
 ```mermaid
 flowchart TD
-    Request["SignoffToolRequest\nProducerIdentity + ArtifactReference[]"] --> Domain["DRC / LVS / PEX engine"]
-    Domain --> Runner["TimedProcessRunner\ntimeout + cancellation"]
+    Domain["Domain-owned request\nDRC / LVS / PEX engine"] --> Runner["TimedProcessRunner\ntimeout + cancellation"]
     Runner --> Tool["External signoff tool"]
-    Tool --> Result["SignoffToolResult"]
-    Result --> Evidence["EvidenceManifest"]
-    Result --> Diagnostics["DesignDiagnostic[]"]
+    Tool --> Output["TimedProcessResult"]
+    Output --> DomainResult["Domain-owned result and evidence"]
 ```
 
-## CircuiteFoundation integration
+## Domain integration
 
-The package depends on and re-exports `CircuiteFoundation` for its shared
-execution boundary:
-
-- `SignoffToolRequest` identifies the producer and immutable input artifacts,
-  with optional configuration and design-revision digests.
-- `SignoffToolResult` carries output `ArtifactReference` values, structured
-  diagnostics, and an `EvidenceManifest` from caller-supplied provenance.
-- `SignoffToolEngine` refines `CircuiteFoundation.Engine` for domain adapters.
-
-`TimedProcessRunner` remains the owner of process safety. It must be injected
-or composed by a concrete engine; the Foundation protocol does not launch a
-process and does not infer tool qualification from an exit code.
+`TimedProcessRunner` owns process safety and is injected or composed by a
+concrete domain engine. The domain package defines its own Foundation-backed
+request, result, artifacts, diagnostics, and evidence. A process exit code is
+never interpreted here as a signoff verdict or tool qualification decision.
 
 ## Ownership boundary
 
 | Concern | Owner |
 |---|---|
-| Engine, artifact, provenance, and diagnostic vocabulary | CircuiteFoundation |
+| Engine request/result and artifact provenance | Domain signoff engines using CircuiteFoundation |
 | Timeout, cancellation, and descendant process cleanup | SignoffToolSupport |
 | PDK root/profile discovery and deck readiness inventory | SignoffToolSupport |
 | DRC/LVS/PEX/STA/EM-IR rule semantics | Domain signoff engines |
@@ -58,7 +48,7 @@ process and does not infer tool qualification from an exit code.
 
 ## Handoff for implementation agents
 
-An implementation agent may implement a concrete `SignoffToolEngine` for a
-domain package. It must pass every external launch through `TimedProcessRunner`,
-capture stdout/stderr and cancellation outcomes as typed diagnostics, and
-materialize verified artifacts before constructing `SignoffToolResult`.
+An implementation agent implements the domain package's own execution protocol
+directly. Every external launch passes through `TimedProcessRunner`; the domain
+implementation converts captured output and process failures into its typed
+diagnostics and materializes its own verified artifacts.
