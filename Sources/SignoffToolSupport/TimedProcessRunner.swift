@@ -6,13 +6,27 @@ import Darwin
 
 public struct TimedProcessResult: Sendable, Hashable {
     public let exitCode: Int32
-    public let standardOutput: String
-    public let standardError: String
+    public let standardOutputData: Data
+    public let standardErrorData: Data
+
+    public var standardOutput: String {
+        String(decoding: standardOutputData, as: UTF8.self)
+    }
+
+    public var standardError: String {
+        String(decoding: standardErrorData, as: UTF8.self)
+    }
 
     public init(exitCode: Int32, standardOutput: String, standardError: String) {
         self.exitCode = exitCode
-        self.standardOutput = standardOutput
-        self.standardError = standardError
+        self.standardOutputData = Data(standardOutput.utf8)
+        self.standardErrorData = Data(standardError.utf8)
+    }
+
+    public init(exitCode: Int32, standardOutputData: Data, standardErrorData: Data) {
+        self.exitCode = exitCode
+        self.standardOutputData = standardOutputData
+        self.standardErrorData = standardErrorData
     }
 }
 
@@ -231,8 +245,10 @@ public struct TimedProcessRunner: Sendable {
             session.outputPipe.fileHandleForReading.closeFile()
             session.errorPipe.fileHandleForReading.closeFile()
 
-            let stdout = Self.utf8String(from: session.stdoutBuffer.snapshot())
-            let stderr = Self.utf8String(from: session.stderrBuffer.snapshot())
+            let stdoutData = session.stdoutBuffer.snapshot()
+            let stderrData = session.stderrBuffer.snapshot()
+            let stdout = Self.utf8String(from: stdoutData)
+            let stderr = Self.utf8String(from: stderrData)
             if let cancellationCheckFailure = snapshot.cancellationCheckFailure {
                 session.continuation.resume(throwing: TimedProcessError.cancellationCheckFailed(
                     executablePath: session.configuration.executablePath,
@@ -261,8 +277,8 @@ public struct TimedProcessRunner: Sendable {
             }
             session.continuation.resume(returning: TimedProcessResult(
                 exitCode: snapshot.exitCode,
-                standardOutput: stdout,
-                standardError: stderr
+                standardOutputData: stdoutData,
+                standardErrorData: stderrData
             ))
         }
     }

@@ -131,8 +131,8 @@ enum TimedProcessSpawner {
         let directoryPath = workingDirectory.path(percentEncoded: false)
         try directoryPath.withCString { path in
             try requirePOSIXSuccess(
-                posix_spawn_file_actions_addchdir(&actions, path),
-                operation: "posix_spawn_file_actions_addchdir"
+                posix_spawn_file_actions_addchdir_np(&actions, path),
+                operation: "posix_spawn_file_actions_addchdir_np"
             )
         }
     }

@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "SignoffToolSupport",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS(.v15)],
     products: [
         .library(name: "SignoffToolSupport", targets: ["SignoffToolSupport"]),
     ],

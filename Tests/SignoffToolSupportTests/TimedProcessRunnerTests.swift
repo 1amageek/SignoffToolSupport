@@ -10,6 +10,18 @@ import Darwin
 @Suite("Timed process runner")
 struct TimedProcessRunnerTests {
     @Test(.timeLimit(.minutes(1)))
+    func resultPreservesNonUTF8ProcessOutputBytes() async throws {
+        let result = try await TimedProcessRunner(timeoutSeconds: 5).run(
+            executableURL: URL(filePath: "/usr/bin/printf"),
+            arguments: ["\\377\\000\\376"]
+        )
+
+        #expect(result.exitCode == 0)
+        #expect(result.standardOutputData == Data([0xff, 0x00, 0xfe]))
+        #expect(result.standardErrorData.isEmpty)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func executableConveniencePreservesArgumentsEnvironmentAndWorkingDirectory() async throws {
         let workingDirectory = FileManager.default.temporaryDirectory
             .appending(path: "TimedProcessRunnerConvenience-\(UUID().uuidString)")
